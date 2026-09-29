@@ -1,52 +1,77 @@
-name: Build DXVK with Clang (x86-64-v4)
+name: Build DXVK with Clang
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag name for release (leave empty to auto-generate)'
-        required: false
-        default: ''
+        description: 'Release tag (e.g. v3.1.1)'
+        required: true
+        default: 'v3.1.1'
+      draft:
+        description: 'Create draft release'
+        type: boolean
+        default: false
   push:
     tags:
       - "v*.*.*"
+
+env:
+  TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+  DRAFT: ${{ inputs.draft || 'false' }}
+  CCACHE_MAXSIZE: 2G
+  CCACHE_COMPRESS: 'true'
+  LLVM_MINGW_VERSION: '20260922'
+  MESON_COMMON_ARGS: '--buildtype release'
 
 defaults:
   run:
     shell: bash
 
-env:
-  DXVK_VERSION: '3.1.1'
-  MESON_COMMON_ARGS: '--buildtype release'
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   build:
+    strategy:
+      matrix:
+        include:
+          - ver: v3
+            flags: -march=x86-64-v3 -mtune=znver3 ${{ vars.FLAGS }}
+          - ver: v4
+            flags: -march=x86-64-v4 -mtune=znver4 ${{ vars.FLAGS }}
     runs-on: self-hosted
+    timeout-minutes: 60
     container:
       image: archlinux/archlinux:multilib-devel
-      options: --user root
-    outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-      ver: ${{ steps.build.outputs.ver }}
-      archive_name: ${{ steps.pack.outputs.archive_name }}
+    env:
+      OPT_FLAGS: ${{ matrix.flags }}
+      CCACHE_DIR: /__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/.ccache-${{ matrix.ver }}
     steps:
+      - name: Compute version variables
+        run: |
+          DXVK_VERSION="${TAG#v}"
+          echo "DXVK_VERSION=$DXVK_VERSION" >> $GITHUB_ENV
+          echo "Using DXVK_VERSION=$DXVK_VERSION"
+
       - name: Checkout workflow repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
 
-      - name: Determine release tag
-        id: tag
+      - name: Restore ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-dxvk-clang-${{ matrix.ver }}-${{ github.sha }}
+          restore-keys: |
+            ccache-dxvk-clang-${{ matrix.ver }}-
+
+      - name: Configure ccache
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            TAG="${GITHUB_REF_NAME}"
-          else
-            TAG="${{ inputs.tag }}"
-            if [ -z "$TAG" ]; then
-              TAG="v${DXVK_VERSION}-$(date -u +%Y%m%d)-${GITHUB_SHA:0:7}"
-            fi
-          fi
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Using tag: $TAG"
+          mkdir -p "$CCACHE_DIR"
+          ccache --max-size="$CCACHE_MAXSIZE"
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache -s
 
       - name: Install dependencies
         run: |
@@ -54,33 +79,26 @@ jobs:
             git meson ninja \
             clang llvm lld \
             glslang python wine \
-            curl xz
+            ccache curl xz
 
-          # ── Install llvm-mingw toolchain ──
-          LLVM_MINGW_URL="https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64.tar.xz"
+          LLVM_MINGW_URL="https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-x86_64.tar.xz"
           curl -fsSL "$LLVM_MINGW_URL" -o /tmp/llvm-mingw.tar.xz
           mkdir -p /opt/llvm-mingw
           tar -xJf /tmp/llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
           rm /tmp/llvm-mingw.tar.xz
 
-          # ── Verify toolchain ──
-          echo "--- llvm-mingw generic clang ---"
-          /opt/llvm-mingw/bin/clang --version | head -3
-          echo "--- x86_64 target clang ---"
-          /opt/llvm-mingw/bin/x86_64-w64-mingw32-clang --version | head -3
-          echo "--- i686 target clang ---"
-          /opt/llvm-mingw/bin/i686-w64-mingw32-clang --version | head -3
-          echo "--- available tools ---"
-          ls -1 /opt/llvm-mingw/bin/ | grep -E '^(clang|llvm-ar|llvm-strip|llvm-windres|.*-w64-mingw32-clang)' | head -20
-
-          # ── Add llvm-mingw to PATH ──
           echo "/opt/llvm-mingw/bin" >> "$GITHUB_PATH"
-          echo "PATH=/opt/llvm-mingw/bin:$PATH" >> "$GITHUB_ENV"
+
+          echo "--- llvm-mingw x86_64 clang ---"
+          /opt/llvm-mingw/bin/x86_64-w64-mingw32-clang --version | head -3
+          echo "--- llvm-mingw i686 clang ---"
+          /opt/llvm-mingw/bin/i686-w64-mingw32-clang --version | head -3
+          echo "--- lld-link ---"
+          /opt/llvm-mingw/bin/lld-link --version | head -3
 
       - name: Clone DXVK source
         run: |
           rm -rf dxvk
-          echo "TAG (release): $TAG"
           git clone --depth 1 --branch "${TAG}" \
             https://github.com/doitsujin/dxvk.git dxvk
           cd dxvk
@@ -88,8 +106,8 @@ jobs:
 
       - name: Copy Clang cross-files
         run: |
-          cp .github/helpers/build-win64-clang.txt dxvk/
-          cp .github/helpers/build-win32-clang.txt dxvk/
+          cp .github/helpers/build-win64-clang-${{ matrix.ver }}.txt dxvk/build-win64-clang.txt
+          cp .github/helpers/build-win32-clang-${{ matrix.ver }}.txt dxvk/build-win32-clang.txt
           ls -l dxvk/build-win*-clang.txt
 
       - name: Patch DXVK for Clang AVX support
@@ -131,75 +149,70 @@ jobs:
           meson setup build.32-clang --cross-file=build-win32-clang.txt $MESON_COMMON_ARGS
           ninja -C build.32-clang
 
-          VERSION_NAME="${TAG#v}"
-          ls -lh build.64-clang/
-          ls -lh build.32-clang/
+          mkdir -p "dxvk-${DXVK_VERSION}/x64" "dxvk-${DXVK_VERSION}/x86"
 
-          mkdir -p "dxvk-${VERSION_NAME}/x64" "dxvk-${VERSION_NAME}/x86"
+          find build.64-clang -name '*.dll' -exec cp {} "dxvk-${DXVK_VERSION}/x64/" \;
+          find build.32-clang -name '*.dll' -exec cp {} "dxvk-${DXVK_VERSION}/x86/" \;
 
-          find build.64-clang -name '*.dll' -exec cp {} "dxvk-${VERSION_NAME}/x64/" \;
-          find build.32-clang -name '*.dll' -exec cp {} "dxvk-${VERSION_NAME}/x86/" \;
+          [ -f setup_dxvk.sh ] && cp setup_dxvk.sh "dxvk-${DXVK_VERSION}/" || true
 
-          [ -f setup_dxvk.sh ] && cp setup_dxvk.sh "dxvk-${VERSION_NAME}/" || true
-
-          tar -caf "dxvk-${VERSION_NAME}.tar.zst" "dxvk-${VERSION_NAME}"
+          tar -caf "dxvk-${DXVK_VERSION}-x86-64-${{ matrix.ver }}.tar.zst" "dxvk-${DXVK_VERSION}"
           echo "Archive created:"
-          ls -lh "dxvk-${VERSION_NAME}.tar.zst"
-          echo "ver=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          ls -lh "dxvk-${DXVK_VERSION}-x86-64-${{ matrix.ver }}.tar.zst"
 
-      - name: Locate and copy archive
-        id: pack
-        working-directory: dxvk
-        run: |
-          SRC_ARCHIVE=$(ls dxvk-*.tar.zst | head -1)
-          if [ -z "$SRC_ARCHIVE" ]; then
-            echo "ERROR: no archive found"
-            ls -lh
-            exit 1
-          fi
-          ARCHIVE_NAME=$(basename "$SRC_ARCHIVE")
-          cp "$SRC_ARCHIVE" "../${ARCHIVE_NAME}"
-          echo "archive_name=${ARCHIVE_NAME}" >> "$GITHUB_OUTPUT"
-          echo "Archive: ${ARCHIVE_NAME}"
-          ls -lh "../${ARCHIVE_NAME}"
-
-      - name: Upload archive as artifact
+      - name: Upload archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: dxvk-archive
-          path: ${{ steps.pack.outputs.archive_name }}
-          retention-days: 5
+          name: dxvk-archive-${{ matrix.ver }}
+          path: dxvk/dxvk-*.tar.zst
+          retention-days: ${{ env.DRAFT == 'true' && 1 || 5 }}
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache -s
 
   release:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - name: Download artifact
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: dxvk-archive
-          path: .
+          path: artifacts
+          merge-multiple: true
 
-      - name: Create or update release with archive
+      - name: Create release and upload archives
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.build.outputs.tag }}
-          VER: ${{ needs.build.outputs.ver }}
-          ARCHIVE: ${{ needs.build.outputs.archive_name }}
         run: |
+          DXVK_VERSION="${TAG#v}"
+          FLAGS=(--latest)
+          [[ $DRAFT = true ]] && FLAGS=(--draft)
+
+          TITLE="DXVK ${DXVK_VERSION} (Clang x86-64-v3/v4)"
+          [[ $DRAFT = true ]] && TITLE="[DRAFT] $TITLE"
+
+          ls -lh artifacts/
+
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $TAG already exists — uploading files"
+            echo "Release $TAG already exists - uploading files"
             gh release upload "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --clobber \
-              "$ARCHIVE"
+              artifacts/*.tar.zst
           else
             echo "Creating release $TAG"
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "DXVK ${VER} (x86-64-v4) (${TAG})" \
-              --latest \
-              "$ARCHIVE"
+              --target ${{ github.sha }} \
+              --title "$TITLE" \
+              --notes-file .github/release-notes.md \
+              "${FLAGS[@]}" \
+              artifacts/*.tar.zst
           fi

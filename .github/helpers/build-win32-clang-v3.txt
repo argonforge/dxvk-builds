@@ -1,0 +1,23 @@
+[binaries]
+c = 'i686-w64-mingw32-clang'
+cpp = 'i686-w64-mingw32-clang++'
+ar = 'llvm-ar'
+strip = 'llvm-strip'
+windres = 'i686-w64-mingw32-windres'
+c_ld = 'lld'
+cpp_ld = 'lld'
+
+[properties]
+needs_exe_wrapper = true
+
+[host_machine]
+system = 'windows'
+cpu_family = 'x86'
+cpu = 'i686'
+endian = 'little'
+
+[built-in options]
+c_args = ['-march=x86-64-v3', '-mtune=znver3', '-m32', '-O3', '-fomit-frame-pointer', '-falign-functions=32', '-falign-loops=32', '-mbranches-within-32B-boundaries']
+cpp_args = ['-march=x86-64-v3', '-mtune=znver3', '-m32', '-O3', '-fomit-frame-pointer', '-falign-functions=32', '-falign-loops=32', '-mbranches-within-32B-boundaries']
+c_link_args = ['-fuse-ld=lld']
+cpp_link_args = ['-fuse-ld=lld']
