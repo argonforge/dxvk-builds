@@ -35,17 +35,12 @@ jobs:
   build:
     strategy:
       matrix:
-        include:
-          - ver: v3
-            flags: -march=x86-64-v3 -mtune=znver3 ${{ vars.FLAGS }}
-          - ver: v4
-            flags: -march=x86-64-v4 -mtune=znver4 ${{ vars.FLAGS }}
+        ver: [ v3, v4 ]
     runs-on: self-hosted
     timeout-minutes: 60
     container:
       image: archlinux/archlinux:multilib-devel
     env:
-      OPT_FLAGS: ${{ matrix.flags }}
       CCACHE_DIR: /__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/.ccache-${{ matrix.ver }}
     steps:
       - name: Compute version variables
@@ -59,7 +54,7 @@ jobs:
           pacman -Syu --needed --noconfirm \
             git meson ninja \
             clang llvm lld \
-            glslang python wine \
+            glslang python \
             ccache curl xz
 
           LLVM_MINGW_URL="https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-x86_64.tar.xz"
@@ -141,7 +136,6 @@ jobs:
 
       - name: Build DXVK
         working-directory: dxvk
-        id: build
         run: |
           meson setup build.64-clang --cross-file=build-win64-clang.txt $MESON_COMMON_ARGS
           ninja -C build.64-clang
@@ -195,7 +189,7 @@ jobs:
           FLAGS=(--latest)
           [[ $DRAFT = true ]] && FLAGS=(--draft)
 
-          TITLE="DXVK ${DXVK_VERSION} (Clang x86-64-v3/v4)"
+          TITLE="DXVK ${DXVK_VERSION} (Clang)"
           [[ $DRAFT = true ]] && TITLE="[DRAFT] $TITLE"
 
           ls -lh artifacts/
