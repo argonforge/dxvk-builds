@@ -54,25 +54,6 @@ jobs:
           echo "DXVK_VERSION=$DXVK_VERSION" >> $GITHUB_ENV
           echo "Using DXVK_VERSION=$DXVK_VERSION"
 
-      - name: Checkout workflow repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
-
-      - name: Restore ccache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-dxvk-clang-${{ matrix.ver }}-${{ github.sha }}
-          restore-keys: |
-            ccache-dxvk-clang-${{ matrix.ver }}-
-
-      - name: Configure ccache
-        run: |
-          mkdir -p "$CCACHE_DIR"
-          ccache --max-size="$CCACHE_MAXSIZE"
-          ccache --set-config=compression=true
-          ccache --set-config=compression_level=6
-          ccache -s
-
       - name: Install dependencies
         run: |
           pacman -Syu --needed --noconfirm \
@@ -95,6 +76,25 @@ jobs:
           /opt/llvm-mingw/bin/i686-w64-mingw32-clang --version | head -3
           echo "--- lld-link ---"
           /opt/llvm-mingw/bin/lld-link --version | head -3
+
+      - name: Checkout workflow repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+
+      - name: Restore ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-dxvk-clang-${{ matrix.ver }}-${{ github.sha }}
+          restore-keys: |
+            ccache-dxvk-clang-${{ matrix.ver }}-
+
+      - name: Configure ccache
+        run: |
+          mkdir -p "$CCACHE_DIR"
+          ccache --max-size="$CCACHE_MAXSIZE"
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache -s
 
       - name: Clone DXVK source
         run: |
